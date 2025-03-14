@@ -1,46 +1,82 @@
-const Scraper = require('images-scraper');
-const fs = require('fs');
+const puppeteer = require('puppeteer');
 const request = require('request');
+const fs = require('fs');
 
-const google = new Scraper({
-    puppeteer: {
-        headless: false,
-    },
-    safe: false
-});
+const QUERY = 'pizza margerita';
+const LIMIT = 10;
 
-/*
-const options = {
-    userAgent: 'Mozilla/5.0 (X11; Linux i686; rv:64.0) Gecko/20100101 Firefox/64.0', // the user agent
-    puppeteer: {}, // puppeteer options, for example, { headless: false }
-    tbs: { // every possible tbs search option, some examples and more info: http://jwebnet.net/advancedgooglesearch.html
-        isz: // options: l(arge), m(edium), i(cons), etc.
-            itp: // options: clipart, face, lineart, news, photo
-            ic: // options: color, gray, trans
-            sur: // options: fmc (commercial reuse with modification), fc (commercial reuse), fm (noncommercial reuse with modification), f (noncommercial reuse)
-    },
-    safe: false // enable/disable safe search
-};*/
+async function imgScrape(queries, limit) {
+    try {
+        const browser = await puppeteer.launch({ headless: true });
+        const page = await browser.newPage();
+        const allImages = new Set();
+        
+        for (const query of queries) {
+            await page.goto(`https://duckduckgo.com/?q=${query}&atb=v314-1&iar=images&iax=images&ia=images`);
+            
+            await page.evaluate(async () => {
+                for (let i = 0; i < 10; i++) {
+                    window.scrollBy(0, window.innerHeight);
+                    await new Promise(resolve => setTimeout(resolve, 500));
+                }
+            });
 
-(async () => {
-    const results = await google.scrape('gerookte zalm', 10);
-    console.log('results', results);
+            await page.waitForSelector('img');
+
+            const images = await page.evaluate(() => {
+                const imageElements = document.querySelectorAll('img');
+                const urls = [];
+                imageElements.forEach(img => {
+                    const url = img.src;
+                    if (url.startsWith('http') && !url.includes('google')) {
+                        urls.push(url);
+                    }
+                });
+                return urls;
+            });
+
+            images.forEach(url => allImages.add(url));
+        }
+
+        await browser.close();
+
+        return Array.from(allImages).slice(0, limit);
+
+    } catch (err) {
+        console.error('An error occurred:', err);
+    }
+}
+
+imgScrape([QUERY], LIMIT).then((results) => {
+    if (!results || results.length === 0) {
+        console.log('No images found.');
+        return;
+    }
+
     results.forEach((img, index) => {
-        download(img.url, `./test/zalm${index}.jpg`, () => {
-            console.log(`Saved img n${index}`);
-        })
-    })
-})();
-
-/*
-https://stackoverflow.com/questions/12740659/downloading-images-with-node-js
-*/
+        download(img, `./test/${QUERY}${index}.jpg`, () => {
+            console.log(`Saved img ${index}`);
+        });
+    });
+});
 
 const download = (uri, filename, callback) => {
     request.head(uri, function (err, res, body) {
+        if (err || !res) {
+            console.error(`Failed to fetch ${uri}:`, err);
+            return;
+        }
+
+        if (!res.headers) {
+            console.error(`No headers received for ${uri}`);
+            return;
+        }
+
         console.log('content-type:', res.headers['content-type']);
         console.log('content-length:', res.headers['content-length']);
 
-        request(uri).pipe(fs.createWriteStream(filename)).on('close', callback);
+        request(uri)
+            .pipe(fs.createWriteStream(filename))
+            .on('close', callback);
     });
 };
